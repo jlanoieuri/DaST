@@ -81,7 +81,7 @@ if opt.dataset == 'azure':
                                         ]))
     
     # Use a large synthetic model
-    netD = Net_l().cuda()
+    netD = Net_l(2).cuda()
     netD = nn.DataParallel(netD)
 
     # Load the target model
@@ -109,7 +109,7 @@ elif opt.dataset == 'mnist':
                                         ]))
     
     # Use a large synthetic model
-    netD = Net_l().cuda()
+    netD = Net_l(2).cuda()
 
     # Use parallelization
     netD = nn.DataParallel(netD)
@@ -435,21 +435,33 @@ batch_num = 1000 # The number of generated training data batches
 best_accuracy = 0.0 # The best accuracy of the synthetic model D's predictions matching the target model's predictions
 best_att = 0.0 # The best attack success rate of the adversarial examples, generated against D, on the target model
 
-PROBE_CLASS = None # The probe used to find new classes in the dataset, initialized to None
+probe_class = 0 # The probe used to find new classes in the dataset, initialized to 0
 
-class_labels = [PROBE_CLASS] # The classes in the dataset that have been found so far
+class_labels = [probe_class] # The classes in the dataset that have been found so far
+
+def update_probe_class():
+    i = 0 # Start with the smallest class label, 0
+    while i in class_labels[:-1]: # While the class label (besides the trailing probe class) is in the list
+        i += 1 # Increment the class label
+    return i # Return smallest class label that has not been found yet
 
 # Function to track when a new class is found in the generated training data and add a new deconvolution block to the training data generation model G
 def new_class_found(label):
-    if label not in class_labels: # If the class label has not been found before:
+    if label not in class_labels or label == probe_class: # If the class label has not been found before:
         print("New class found: " + str(label)) # Log that a new class has been found
-        if class_labels == [PROBE_CLASS]: # If this is the first class found:
+        if class_labels == [probe_class]: # If this is the first class found:
             class_labels.insert(-1, label) # Only add the class label to the list of found classes right before the probe class
         else:
             class_labels.insert(-1, label) # Add the class label to the list of found classes right before the probe class
             netG.module.increment_num_classes() # Increment the number of classes in the training data generation model G
+            netD.module.increment_num_classes() # Increment the number of classes in the synthetic model D
             pre_conv_block.append(nn.DataParallel(pre_conv().cuda())) # Add a new deconvolution block for the new class
             optimizer_block.append(optim.Adam(pre_conv_block[-1].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))) # Add an Adam optimizer for the new deconvolution block
+
+        probe_class = update_probe_class() # Update the probe class to the next smallest class label that has not been found yet
+        class_labels[-1] = probe_class # Update the probe class in the list of found classes
+    return probe_class # Return the updated probe class
+
 
 # Function to get the target model's output label for a given input
 def get_target_label(data):
@@ -491,8 +503,8 @@ for epoch in range(opt.niter): # For each epoch:
             # Check if any new classes are found and create new deconvolution blocks for them
             for unique_label in target_labels.unique(): # Get unique labels from the target model's predictions
                 unique_label = unique_label.item() # Convert the unique label from a tensor
-                if unique_label not in class_labels: # If the label has not been found before:
-                    new_class_found(unique_label) # Handle the new label being found
+                if unique_label not in class_labels or unique_label == probe_class: # If the label has not been found before:
+                    probe_class = new_class_found(unique_label) # Handle the new label being found
 
             # Assign the intended label to every piece of data in the batch
             intended_label = torch.full((noise_chunk[i].size(0),), class_labels[i]).cuda()
@@ -524,10 +536,10 @@ for epoch in range(opt.niter): # For each epoch:
         prob = F.softmax(output, dim=1)
 
         # Get MSE loss between the probabilities of the synthetic model D  and the target model
-        errD_prob = mse_loss(prob, outputs, reduction='mean')
+        errD_prob = mse_loss(prob[:,:-1], outputs, reduction='mean')
 
         # Get the cross entropy loss between the predicted labels of the synthetic model D and the target model
-        errD_fake = criterion(output, label) + errD_prob * opt.beta
+        errD_fake = criterion(output[:,:-1], label) + errD_prob * opt.beta
 
         # Get the mean of the loss for logging purposes
         D_G_z1 = errD_fake.mean().item()
@@ -551,7 +563,7 @@ for epoch in range(opt.niter): # For each epoch:
         output = netD(data) # Get the synthetic model D's output for the generated training data
 
         # Get the loss of the synthetic model D's output compared to the target model's output
-        loss_imitate = criterion_max(pred=output, truth=label, proba=outputs)
+        loss_imitate = criterion_max(pred=output[:, :-1], truth=label, proba=outputs)
 
         # Get the cross entropy loss between the predicted labels of the synthetic model D and the intended labels for the generated training data
         loss_diversity = criterion(output, set_label.squeeze().long())

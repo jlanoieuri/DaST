@@ -51,14 +51,20 @@ class Net_m(nn.Module):
 
 
 class Net_l(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes):
         super(Net_l, self).__init__()
         self.conv1 = nn.Conv2d(1, 20, 5, 1)
         self.conv2 = nn.Conv2d(20, 50, 5, 1)
         self.conv3 = nn.Conv2d(50, 50, 3, 1, 1)
         self.conv4 = nn.Conv2d(50, 50, 3, 1, 1)
         self.fc1 = nn.Linear(50, 500)
-        self.fc2 = nn.Linear(500, 10)
+        self.fc2 = nn.Linear(500, num_classes)
+
+    def increment_num_classes(self):
+        old_fc2 = self.fc2
+        self.fc2 = nn.Linear(500, old_fc2.out_features + 1)
+        self.fc2.weight.data[:-1] = old_fc2.weight.data
+        self.fc2.bias.data[:-1] = old_fc2.bias.data
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
