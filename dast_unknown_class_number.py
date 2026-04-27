@@ -222,10 +222,6 @@ class pre_conv(nn.Module):
                 nn.BatchNorm2d(self.nf * 8), # Normalization
                 nn.ReLU(True),  # Activation function
 
-                #! nn.Conv2d(self.nf * 8, self.nf * 8, 3, 1, 1, bias=False),
-                #! nn.BatchNorm2d(self.nf * 8),
-                #! nn.ReLU(True),
-
                 nn.Conv2d(self.nf * 8, self.nf * 8, 3, 1, round((self.shape[0]-1) / 2), bias=False), # Convolutional layer
                 nn.BatchNorm2d(self.nf * 8), # Normalization
                 nn.ReLU(True),  # Activation function
@@ -247,9 +243,7 @@ class pre_conv(nn.Module):
                 nn.ReLU(True), # Activation function
 
                 nn.Conv2d(self.shape[0], self.shape[0], 3, 1, 1, bias=False), # Convolutional layer
-                #! if self.shape[0] == 3:
-                #!     nn.Tanh()
-                #! else:
+
                 nn.Sigmoid() # Activation function, no need to normalize because Sigmoid constrains the outputs between 0 and 1
             )
 
@@ -258,21 +252,22 @@ class pre_conv(nn.Module):
         output = self.pre_conv(input)
         return output
 
-# Initialize a signle deconvolution block for the first class in the dataset
+# Initialize two deconvolution blocks for the first class and other classes in the dataset, respectively
 # These blocks are used to learn the features of each class in the dataset within the training data generation model G
 # TODO: This needs to be appended when a new class is found.
 pre_conv_block = []
-pre_conv_block.append(nn.DataParallel(pre_conv().cuda()))
+for i in range(2):
+    pre_conv_block.append(nn.DataParallel(pre_conv().cuda()))
 
 # The network that generates training data for the synthetic model
 #? Do the number of classes impact the architecture of the training data generation model? I don't think so.
 class Generator(nn.Module):
-    def __init__(self, num_class):
+    def __init__(self, num_classes):
         super(Generator, self).__init__()
         self.nf = 64
 
         # TODO: This needs to be incremented when a new class is found.
-        self.num_class = num_class  # The number of classes in the target model
+        self.num_classes = num_classes  # The number of classes in the target model
 
         # Configure the model layers based on the passed argument
         if opt.G_type == 1:
@@ -337,7 +332,7 @@ class Generator(nn.Module):
 
     # Function to increment the number of classes by the amount of new classes found
     def increment_num_classes(self):
-        self.num_class += 1
+        self.num_classes += 1
 
     # Function to perform a forward pass through the model
     def forward(self, input):
@@ -350,7 +345,7 @@ def chunks(arr, m):
     return [arr[i:i + n] for i in range(0, arr.size(0), n)]
 
 # Initialize the training data generation model
-netG = Generator(1).cuda()
+netG = Generator(2).cuda()
 
 # Initialize the weights of the training data generation model
 netG.apply(weights_init)
@@ -368,10 +363,11 @@ criterion_max = Loss_max()
 optimizerD = optim.Adam(netD.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
 
-# Set up Adam optimizer for the first deconvolution block
+# Set up Adam optimizer for the first two deconvolution blocks
 # TODO: This needs to be appended when a new class is found.
 optimizer_block = []
-optimizer_block.append(optim.Adam(pre_conv_block[0].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)))
+for i in range(2):
+    optimizer_block.append(optim.Adam(pre_conv_block[i].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)))
 
 # Looks like it should estimate the accuracy of the synthetic model D before training
 # In actuality this is finding the accuracy of the target model on the test data
@@ -439,16 +435,21 @@ batch_num = 1000 # The number of generated training data batches
 best_accuracy = 0.0 # The best accuracy of the synthetic model D's predictions matching the target model's predictions
 best_att = 0.0 # The best attack success rate of the adversarial examples, generated against D, on the target model
 
-class_labels = [] # The classes in the dataset that have been found so far
+PROBE_CLASS = None # The probe used to find new classes in the dataset, initialized to None
+
+class_labels = [PROBE_CLASS] # The classes in the dataset that have been found so far
 
 # Function to track when a new class is found in the generated training data and add a new deconvolution block to the training data generation model G
 def new_class_found(label):
     if label not in class_labels: # If the class label has not been found before:
         print("New class found: " + str(label)) # Log that a new class has been found
-        class_labels.append(label) # Add the class label to the list of found classes
-        netG.increment_num_classes() # Increment the number of classes in the training data generation model G
-        pre_conv_block.append(nn.DataParallel(pre_conv().cuda())) # Add a new deconvolution block for the new class
-        optimizer_block.append(optim.Adam(pre_conv_block[-1].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))) # Add an Adam optimizer for the new deconvolution block
+        if class_labels == [PROBE_CLASS]: # If this is the first class found:
+            class_labels.insert(-1, label) # Only add the class label to the list of found classes right before the probe class
+        else:
+            class_labels.insert(-1, label) # Add the class label to the list of found classes right before the probe class
+            netG.module.increment_num_classes() # Increment the number of classes in the training data generation model G
+            pre_conv_block.append(nn.DataParallel(pre_conv().cuda())) # Add a new deconvolution block for the new class
+            optimizer_block.append(optim.Adam(pre_conv_block[-1].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))) # Add an Adam optimizer for the new deconvolution block
 
 # Function to get the target model's output label for a given input
 def get_target_label(data):
@@ -473,7 +474,7 @@ for epoch in range(opt.niter): # For each epoch:
 
         # Update the synthetic model D
         noise = torch.randn(opt.batchSize, nz, 1, 1, device=device).cuda() # Generate random noise to be used 
-        noise_chunk = chunks(noise, netG.num_classes) # Split the noise into equal parts for each class in the dataset
+        noise_chunk = chunks(noise, netG.module.num_classes) # Split the noise into equal parts for each class in the dataset
 
         # For each found class in the dataset, pass a chunk of noise through it's deconvolution block to learn the features of that class and generate training data for the synthetic model D using the training data generation model G
         for i in range(len(noise_chunk)):
@@ -489,8 +490,8 @@ for epoch in range(opt.niter): # For each epoch:
 
             # Check if any new classes are found and create new deconvolution blocks for them
             for unique_label in target_labels.unique(): # Get unique labels from the target model's predictions
-                unique_label = unique_label.item() # Convert the unique label from a tensor to a Python number
-                if unique_label not in class_labels: # If the labels has not been found before:
+                unique_label = unique_label.item() # Convert the unique label from a tensor
+                if unique_label not in class_labels: # If the label has not been found before:
                     new_class_found(unique_label) # Handle the new label being found
 
             # Assign the intended label to every piece of data in the batch
@@ -522,7 +523,6 @@ for epoch in range(opt.niter): # For each epoch:
         # Get the softmax probabilities of the synthetic model D's output
         prob = F.softmax(output, dim=1)
 
-        #! print(torch.sum(outputs) / 500.)
         # Get MSE loss between the probabilities of the synthetic model D  and the target model
         errD_prob = mse_loss(prob, outputs, reduction='mean')
 
@@ -546,7 +546,7 @@ for epoch in range(opt.niter): # For each epoch:
 
         # Update the training data generation model G
         netG.zero_grad() # Zero the gradients for the training data generation model G
-        for i in range(netG.num_classes):
+        for i in range(netG.module.num_classes):
             pre_conv_block[i].zero_grad() # Zero the gradients for the deconvolution blocks for each class in the dataset
         output = netD(data) # Get the synthetic model D's output for the generated training data
 
@@ -572,7 +572,7 @@ for epoch in range(opt.niter): # For each epoch:
         optimizerG.step()
 
         # Update the deconvolution block for each class in the dataset's parameters
-        for i in range(netG.num_classes):
+        for i in range(netG.module.num_classes):
             optimizer_block[i].step()
 
         # Log the losses every 40 batches
@@ -595,7 +595,6 @@ for epoch in range(opt.niter): # For each epoch:
         adv_inputs_ghost = adversary_ghost.perturb(inputs, labels)
 
         with torch.no_grad(): # With no gradient calculation:
-            #! outputs = original_net(adv_inputs_ghost)
 
             # Pass the target model the adversarial examples and get the predicted labels
             if opt.dataset == 'azure':
@@ -603,7 +602,6 @@ for epoch in range(opt.niter): # For each epoch:
             else:
                 outputs = original_net(adv_inputs_ghost)
                 _, predicted = torch.max(outputs.data, 1)
-            #! _, predicted = torch.max(outputs.data, 1)
 
             total += labels.size(0) # Get the total number of predictions
             correct_ghost += (predicted == labels).sum() # Get the number of correct predictions
