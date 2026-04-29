@@ -369,65 +369,65 @@ optimizer_block = []
 for i in range(2):
     optimizer_block.append(optim.Adam(pre_conv_block[i].parameters(), lr=opt.lr, betas=(opt.beta1, 0.999)))
 
-# Looks like it should estimate the accuracy of the synthetic model D before training
-# In actuality this is finding the accuracy of the target model on the test data
-with torch.no_grad(): # With no gradient calculation:
-    correct_netD = 0.0 # Initilize the number of correct predictions to 0
-    total = 0.0 # Initialize the total number of predictions to 0
-    netD.eval()
-    for data in testloader:
-        inputs, labels = data # Split the data into inputs and labels
-        inputs = inputs.cuda() # Move the inputs to the GPU
-        labels = labels.cuda() # Move the labels to the GPU
+# # Looks like it should estimate the accuracy of the synthetic model D before training
+# # In actuality this is finding the accuracy of the target model on the test data
+# with torch.no_grad(): # With no gradient calculation:
+#     correct_netD = 0.0 # Initilize the number of correct predictions to 0
+#     total = 0.0 # Initialize the total number of predictions to 0
+#     netD.eval()
+#     for data in testloader:
+#         inputs, labels = data # Split the data into inputs and labels
+#         inputs = inputs.cuda() # Move the inputs to the GPU
+#         labels = labels.cuda() # Move the labels to the GPU
 
-        # The following line was commented out in the original code:
-        # outputs = netD(inputs)
+#         # The following line was commented out in the original code:
+#         # outputs = netD(inputs)
 
-        # Pass the target model the inputs and get the predicted labels
-        if opt.dataset == 'azure':
-            predicted = cal_azure(clf, inputs)
-        else:
-            outputs = original_net(inputs)
-            _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0) # Get the total number of predictions
+#         # Pass the target model the inputs and get the predicted labels
+#         if opt.dataset == 'azure':
+#             predicted = cal_azure(clf, inputs)
+#         else:
+#             outputs = original_net(inputs)
+#             _, predicted = torch.max(outputs.data, 1)
+#         total += labels.size(0) # Get the total number of predictions
         
-        # Get the number of correct predictions
-        correct_netD += (predicted == labels).sum()
+#         # Get the number of correct predictions
+#         correct_netD += (predicted == labels).sum()
 
-    # Print the accuracy of the model's predictions compared to the test data labels
-    print('Accuracy of the network on netD: %.2f %%' %
-            (100. * correct_netD.float() / total))
+#     # Print the accuracy of the model's predictions compared to the test data labels
+#     print('Accuracy of the network on netD: %.2f %%' %
+#             (100. * correct_netD.float() / total))
 
-# Estimate the attack success rate of the adversarial examples generated against the untrained synthetic model D
-correct_ghost = 0.0 # Initialize the number of correct predictions by the target model on the adversarial examples
-total = 0.0 # Initialize the total number of predictions by the target model on the adversarial examples
-netD.eval()
-for data in testloader:
-    inputs, labels = data # Split the data into inputs and labels
-    inputs = inputs.cuda() # Move the inputs to the GPU
-    labels = labels.cuda() # Move the labels to the GPU
+# # Estimate the attack success rate of the adversarial examples generated against the untrained synthetic model D
+# correct_ghost = 0.0 # Initialize the number of correct predictions by the target model on the adversarial examples
+# total = 0.0 # Initialize the total number of predictions by the target model on the adversarial examples
+# netD.eval()
+# for data in testloader:
+#     inputs, labels = data # Split the data into inputs and labels
+#     inputs = inputs.cuda() # Move the inputs to the GPU
+#     labels = labels.cuda() # Move the labels to the GPU
 
-    # Generate adversarial examples using the IFGSM attack on the untrained synthetic model D
-    adv_inputs_ghost = adversary_ghost.perturb(inputs, labels)
+#     # Generate adversarial examples using the IFGSM attack on the untrained synthetic model D
+#     adv_inputs_ghost = adversary_ghost.perturb(inputs, labels)
 
-    with torch.no_grad(): # With no gradient calculation:
-        # Pass the target model the adversarial examples and get the predicted labels
-        if opt.dataset == 'azure':
-            predicted = cal_azure(clf, adv_inputs_ghost)
-        else:
-            outputs = original_net(adv_inputs_ghost)
-            _, predicted = torch.max(outputs.data, 1)
-    total += labels.size(0) # Get the total number of predictions
-    correct_ghost += (predicted == labels).sum() # Get the number of correct predictions
+#     with torch.no_grad(): # With no gradient calculation:
+#         # Pass the target model the adversarial examples and get the predicted labels
+#         if opt.dataset == 'azure':
+#             predicted = cal_azure(clf, adv_inputs_ghost)
+#         else:
+#             outputs = original_net(adv_inputs_ghost)
+#             _, predicted = torch.max(outputs.data, 1)
+#     total += labels.size(0) # Get the total number of predictions
+#     correct_ghost += (predicted == labels).sum() # Get the number of correct predictions
 
-# Print the attack success rate of the adversarial examples generated against the untrained synthetic model D
-print('Attack success rate: %.2f %%' %
-        (100 - 100. * correct_ghost.float() / total))
+# # Print the attack success rate of the adversarial examples generated against the untrained synthetic model D
+# print('Attack success rate: %.2f %%' %
+#         (100 - 100. * correct_ghost.float() / total))
 
-# Clean up memory
-del inputs, labels, adv_inputs_ghost
-torch.cuda.empty_cache()
-gc.collect()
+# # Clean up memory
+# del inputs, labels, adv_inputs_ghost
+# torch.cuda.empty_cache()
+# gc.collect()
 
 #! ----------------------------------------------------------------------------------------------------------------------
 
@@ -446,7 +446,7 @@ def update_probe_class():
     return i # Return smallest class label that has not been found yet
 
 # Function to track when a new class is found in the generated training data and add a new deconvolution block to the training data generation model G
-def new_class_found(label):
+def new_class_found(label, probe_class):
     if label not in class_labels or label == probe_class: # If the class label has not been found before:
         print("New class found: " + str(label)) # Log that a new class has been found
         if class_labels == [probe_class]: # If this is the first class found:
@@ -504,7 +504,7 @@ for epoch in range(opt.niter): # For each epoch:
             for unique_label in target_labels.unique(): # Get unique labels from the target model's predictions
                 unique_label = unique_label.item() # Convert the unique label from a tensor
                 if unique_label not in class_labels or unique_label == probe_class: # If the label has not been found before:
-                    probe_class = new_class_found(unique_label) # Handle the new label being found
+                    probe_class = new_class_found(unique_label, probe_class) # Handle the new label being found
 
             # Assign the intended label to every piece of data in the batch
             intended_label = torch.full((noise_chunk[i].size(0),), class_labels[i]).cuda()
@@ -535,11 +535,39 @@ for epoch in range(opt.niter): # For each epoch:
         # Get the softmax probabilities of the synthetic model D's output
         prob = F.softmax(output, dim=1)
 
+        known_classes = class_labels[:-1] # All classes we have found so far except the probe class
+        label_to_index = {l: i for i, l in enumerate(class_labels)} # Map from label to index for the known classes
+
+        # Mask to exclude unknown class labels from the loss calculation
+        mask = []
+        for l in label:
+            if l.item() in known_classes:
+                mask.append(True)
+            else:
+                mask.append(False)
+
+        # Get known class labels of the full batch to calculate the loss only on the known classes
+        known_class_labels = []
+        for l in label:
+            if l.item() in known_classes:
+                known_class_labels.append(l.item())
+
+        # Convert class labels to indices for the loss calculation
+        # This is necessary because we have an unknown number of missing classes at any given point in time
+        label_index_mapping = []
+        for l in known_class_labels:
+            label_index_mapping.append(label_to_index[l])
+
+        # Turn the label mapping into a tensor and move it to the GPU
+        label_mapped_to_index = torch.tensor(label_index_mapping).cuda()
+
         # Get MSE loss between the probabilities of the synthetic model D  and the target model
-        errD_prob = mse_loss(prob[:,:-1], outputs, reduction='mean')
+        # Only calculate this loss for the classes we have found so far
+        errD_prob = mse_loss(prob[:,:-1][mask], outputs[mask][:,:len(class_labels)-1], reduction='mean')
 
         # Get the cross entropy loss between the predicted labels of the synthetic model D and the target model
-        errD_fake = criterion(output[:,:-1], label) + errD_prob * opt.beta
+        # Only calculate this loss for the classes we have found so far
+        errD_fake = criterion(output[:,:-1][mask], label_mapped_to_index) + errD_prob * opt.beta
 
         # Get the mean of the loss for logging purposes
         D_G_z1 = errD_fake.mean().item()
@@ -563,7 +591,7 @@ for epoch in range(opt.niter): # For each epoch:
         output = netD(data) # Get the synthetic model D's output for the generated training data
 
         # Get the loss of the synthetic model D's output compared to the target model's output
-        loss_imitate = criterion_max(pred=output[:, :-1], truth=label, proba=outputs)
+        loss_imitate = criterion_max(pred=output[:, :-1][mask], truth=label_mapped_to_index, proba=outputs[mask][:,:len(class_labels)-1])
 
         # Get the cross entropy loss between the predicted labels of the synthetic model D and the intended labels for the generated training data
         loss_diversity = criterion(output, set_label.squeeze().long())
